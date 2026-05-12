@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FIDOBridge</string>
+    <string name="nfc_service_description">FIDO2 NFC Authenticator</string>
+</resources>
