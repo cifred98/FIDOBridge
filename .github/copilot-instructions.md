@@ -8,6 +8,23 @@ FIDOBridge is an Android app that emulates an NFC FIDO2 security key using Host-
 
 The project name in code is `FIDOBridge`.
 
+## Reference Implementation
+
+A working FIDO2 NFC authenticator lives at `/home/cifred/AndroidStudioProjects/android-fido-authenticator`. It implements CTAP2 over NFC with its own key management and credential store. FIDOBridge reuses the same NFC/APDU/CTAP2 framing patterns but replaces the crypto/credential layer with Android's Credential Manager API.
+
+### What to reuse from the reference project
+- **NFC HCE service pattern** — `HostApduService` subclass, AID filter XML (`A0000006472F0001`), APDU request/response parsing
+- **CTAP2 command routing** — command byte dispatch (`0x01` MakeCredential, `0x02` GetAssertion, `0x04` GetInfo), `SELECT AID` handling returning `"U2F_V2"`
+- **CBOR encoding/decoding** — custom CBOR implementation (CborValue hierarchy, CborLongMap/CborTextStringMap, typed encoding/decoding), CTAP2 message constants
+- **Response framing** — `toCtapSuccessResponse()` (leading `0x00` + CBOR), `CtapErrorException` for error responses
+- **authenticatorData construction** — rpIdHash + flags + signCount + attestedCredentialData format
+
+### What NOT to reuse (replaced by Credential Manager)
+- `KeyManager` / `RamKeyManager` — FIDOBridge does not generate or store keys directly
+- `CredentialStore` — credentials live in the system password manager
+- `Certificate` / attestation signing — attestation comes from the WebAuthn API response
+- Direct `Signature.getInstance("SHA256withECDSA")` calls — signing happens in the password manager
+
 ## Tech Stack
 
 - **Language:** Kotlin
