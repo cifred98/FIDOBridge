@@ -1,6 +1,7 @@
 package com.puntokek.fidobridge.ui.debug
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -96,12 +97,14 @@ private fun LogEntryCard(entry: LogEntry) {
         MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
     }
     val dirLabel = if (isRequest) "→ REQ" else "← RES"
+    var hexExpanded by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = bgColor)
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
+            // Header: direction + timestamp
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -121,35 +124,48 @@ private fun LogEntryCard(entry: LogEntry) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-            Text(
-                text = entry.parsedFields,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                lineHeight = 14.sp
-            )
-
+            // Decoded CTAP content (prioritized — shown first and prominent)
             if (entry.decodedCtap != null) {
-                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = entry.decodedCtap,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    lineHeight = 14.sp
+                    color = MaterialTheme.colorScheme.onSurface,
+                    lineHeight = 16.sp
                 )
+                Spacer(modifier = Modifier.height(4.dp))
             }
 
-            Spacer(modifier = Modifier.height(2.dp))
+            // Parsed APDU fields (compact summary)
             Text(
-                text = entry.rawHex,
-                fontSize = 9.sp,
+                text = entry.parsedFields,
+                fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 12.sp,
-                maxLines = 3
+                lineHeight = 13.sp
             )
+
+            // Raw hex: collapsed by default, tap to expand
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = if (hexExpanded) "▾ Raw hex" else "▸ Raw hex (${entry.rawHex.length / 2} bytes)",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.clickable { hexExpanded = !hexExpanded }
+            )
+
+            AnimatedVisibility(visible = hexExpanded) {
+                Text(
+                    text = entry.rawHex,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
         }
     }
 }

@@ -92,7 +92,8 @@ object DebugLog {
         if (request.cla.toInt() == 0x00 && request.ins.toInt() == NfcCtap.INS_SELECT &&
             request.p1.toInt() == 0x04 && request.p2.toInt() == 0x00
         ) {
-            return "SELECT AID=${request.data.toByteArray().toHex()}"
+            val aidHex = request.data.toByteArray().toHex()
+            return "SELECT AID $aidHex (FIDO2 NFC)"
         }
 
         // CTAP2 command (NFCCTAP_MSG)
@@ -102,12 +103,34 @@ object DebugLog {
             val cmdByte = request.data[0].toByte()
             val cmd = Ctap2Command.fromByte(cmdByte)
             val cmdName = cmd?.name ?: "Unknown(0x${"%02x".format(cmdByte)})"
-            val payload = if (request.data.size > 1) {
-                val cborBytes = request.data.toByteArray().copyOfRange(1, request.data.size)
-                val cbor = try { fromCborToEnd(cborBytes) } catch (_: Exception) { null }
-                if (cbor != null) " cbor=${cborValueToString(cbor)}" else " data=${cborBytes.toHex()}"
-            } else ""
-            return "CTAP2 cmd=$cmdName$payload"
+
+            if (request.data.size <= 1) return "CTAP2 $cmdName"
+
+            val cborBytes = request.data.toByteArray().copyOfRange(1, request.data.size)
+            val cbor = try { fromCborToEnd(cborBytes) } catch (_: Exception) { null }
+                ?: return "CTAP2 $cmdName (${cborBytes.size}B payload)"
+
+            // Produce a user-friendly summary based on command type
+            return when (cmd) {
+                Ctap2Command.MAKE_CREDENTIAL -> {
+                    val rpId = try { cbor.getOptional(MakeCredentialParam.RP)?.getOptional("id")?.unbox<String>() } catch (_: Throwable) { null }
+                    val userName = try { cbor.getOptional(MakeCredentialParam.USER)?.getOptional("name")?.unbox<String>() } catch (_: Throwable) { null }
+                    buildString {
+                        append("CTAP2 MakeCredential")
+                        if (rpId != null) append("\n  rpId: $rpId")
+                        if (userName != null) append("\n  user: $userName")
+                    }
+                }
+                Ctap2Command.GET_ASSERTION -> {
+                    val rpId = try { cbor.getOptional(GetAssertionParam.RP_ID)?.unbox<String>() } catch (_: Throwable) { null }
+                    buildString {
+                        append("CTAP2 GetAssertion")
+                        if (rpId != null) append("\n  rpId: $rpId")
+                    }
+                }
+                Ctap2Command.GET_INFO -> "CTAP2 GetInfo"
+                else -> "CTAP2 $cmdName"
+            }
         }
 
         return null
@@ -125,22 +148,78 @@ object DebugLog {
                     ?: "0x${"%02x".format(ctapStatus)}"
             }
 
-            if (data.size > 1) {
-                val cborBytes = data.copyOfRange(1, data.size)
-                val cbor = try { fromCborToEnd(cborBytes) } catch (_: Exception) { null }
-                val payload = if (cbor != null) cborValueToString(cbor) else cborBytes.toHex()
-                return "CTAP2 status=$statusName cbor=$payload"
+            if (data.size <= 1) return "CTAP2 status: $statusName"
+
+            val cborBytes = data.copyOfRange(1, data.size)
+            val cbor = try { fromCborToEnd(cborBytes) } catch (_: Exception) { null }
+
+            if (cbor == null) return "CTAP2 status: $statusName (${cborBytes.size}B payload)"
+
+            // Try to decode authData for user-friendly output
+            val authDataDecoded = decodeAuthDataFromResponse(cbor)
+
+            return buildString {
+                append("CTAP2 status: $statusName")
+                if (authDataDecoded != null) {
+                    append("\n  $authDataDecoded")
+                }
+                // Show response structure summary
+                val summary = decodeResponseSummary(cbor)
+                if (summary != null) append("\n  $summary")
             }
-            return "CTAP2 status=$statusName"
         }
 
         // Version string in SELECT response
         val asString = try { data.decodeToString() } catch (_: Exception) { "" }
         if (asString.startsWith("FIDO_") || asString.startsWith("U2F_")) {
-            return "version=$asString"
+            return "FIDO version: $asString"
         }
 
         return null
+    }
+
+    /**
+     * Produce a concise summary of a CTAP2 response CBOR (e.g. GetInfo fields).
+     */
+    private fun decodeResponseSummary(cbor: CborValue): String? = try {
+        decodeResponseSummaryInternal(cbor)
+    } catch (_: Throwable) { null }
+
+    private fun decodeResponseSummaryInternal(cbor: CborValue): String? {
+        // GetInfo response: has versions (key 1) and aaguid (key 3)
+        val versions = try { cbor.getOptional(0x01L) } catch (_: Throwable) { null }
+        val aaguid = try { cbor.getOptional(0x03L)?.unbox<ByteArray>() } catch (_: Throwable) { null }
+        if (versions != null && aaguid != null) {
+            return "GetInfo: aaguid=${aaguid.toHex()}"
+        }
+
+        // MakeCredential response: has fmt (key 1) — it's a text string
+        val fmt = try { cbor.getOptional(0x01L)?.unbox<String>() } catch (_: Throwable) { null }
+        if (fmt != null) {
+            return "attestation fmt=$fmt"
+        }
+
+        // GetAssertion response: has credential (key 1) with type
+        val cred = try { cbor.getOptional(0x01L)?.getOptional("type")?.unbox<String>() } catch (_: Throwable) { null }
+        if (cred != null) {
+            return "assertion credential type=$cred"
+        }
+
+        return null
+    }
+
+    /**
+     * Attempt to extract and decode authenticatorData from a CTAP2 response CBOR map.
+     * Works for both MakeCredential (key 0x02) and GetAssertion (key 0x02) responses.
+     */
+    private fun decodeAuthDataFromResponse(cbor: CborValue): String? {
+        // Both MakeCredential and GetAssertion responses have authData at key 0x02
+        val authDataBytes = try {
+            cbor.getOptional(0x02L)?.unbox<ByteArray>()
+        } catch (_: Throwable) { null } ?: return null
+
+        val parsed = AuthDataParser.parse(authDataBytes) ?: return null
+        return parsed.toString()
     }
 }
 
