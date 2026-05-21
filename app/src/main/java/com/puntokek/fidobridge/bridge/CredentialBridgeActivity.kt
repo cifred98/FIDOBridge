@@ -73,7 +73,7 @@ class CredentialBridgeActivity : ComponentActivity() {
         val response = credentialManager.createCredential(this, request)
         val responseJson = extractRegistrationJson(response)
         Log.i(TAG, "handleCreate: got registration response")
-        return WebAuthnBridge.parseCreateResponse(responseJson, pending.clientDataHash)
+        return WebAuthnBridge.parseCreateResponse(responseJson, pending.clientDataHash, pending.rpId)
     }
 
     private suspend fun handleGet(pending: PendingCredentialOperation): ByteArray {

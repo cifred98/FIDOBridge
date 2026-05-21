@@ -11,6 +11,7 @@ data class PendingCredentialOperation(
     val requestJson: String,
     val clientDataHash: ByteArray,
     val origin: String,
+    val rpId: String,
     val deferred: CompletableDeferred<ByteArray>,
     val operationId: Long = System.nanoTime()
 ) {

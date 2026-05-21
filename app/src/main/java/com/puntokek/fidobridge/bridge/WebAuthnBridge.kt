@@ -4,6 +4,7 @@ import android.util.Log
 import com.puntokek.fidobridge.crypto.AttestationKey
 import com.puntokek.fidobridge.protocol.*
 import com.puntokek.fidobridge.protocol.cbor.*
+import com.puntokek.fidobridge.settings.RpIdOverrideRepository
 import com.puntokek.fidobridge.util.base64url
 import com.puntokek.fidobridge.util.decodeBase64url
 import org.json.JSONArray
@@ -35,6 +36,10 @@ object WebAuthnBridge {
         val options = params.getOptional(MakeCredentialParam.OPTIONS)
         val requestedRk = options?.getOptional("rk")?.unbox<Boolean>() == true
 
+        // Apply per-rpId userVerification override
+        val override = RpIdOverrideRepository.getOverride(rpId)
+        val userVerification = override?.userVerification ?: "required"
+
         val json = JSONObject().apply {
             put("rp", JSONObject().apply {
                 put("id", rpId)
@@ -51,7 +56,7 @@ object WebAuthnBridge {
             put("attestation", "none")
             put("authenticatorSelection", JSONObject().apply {
                 put("residentKey", if (requestedRk) "required" else "preferred")
-                put("userVerification", "required")
+                put("userVerification", userVerification)
             })
 
             val excludeList = params.getOptional(MakeCredentialParam.EXCLUDE_LIST)
@@ -60,7 +65,7 @@ object WebAuthnBridge {
             }
         }
 
-        Log.i(TAG, "buildCreateRequestJson: rpId=$rpId user=$userName rk=$requestedRk")
+        Log.i(TAG, "buildCreateRequestJson: rpId=$rpId user=$userName rk=$requestedRk uv=$userVerification")
         return json.toString()
     }
 
@@ -70,11 +75,15 @@ object WebAuthnBridge {
     fun buildGetRequestJson(params: CborValue): String {
         val rpId = params.getRequired(GetAssertionParam.RP_ID).unbox<String>()
 
+        // Apply per-rpId userVerification override
+        val override = RpIdOverrideRepository.getOverride(rpId)
+        val userVerification = override?.userVerification ?: "required"
+
         val json = JSONObject().apply {
             put("challenge", DUMMY_CHALLENGE)
             put("rpId", rpId)
             put("timeout", 60000)
-            put("userVerification", "required")
+            put("userVerification", userVerification)
 
             val allowList = params.getOptional(GetAssertionParam.ALLOW_LIST)
             if (allowList != null) {
@@ -82,7 +91,7 @@ object WebAuthnBridge {
             }
         }
 
-        Log.i(TAG, "buildGetRequestJson: rpId=$rpId")
+        Log.i(TAG, "buildGetRequestJson: rpId=$rpId uv=$userVerification")
         return json.toString()
     }
 
@@ -104,8 +113,9 @@ object WebAuthnBridge {
     /**
      * Parse a WebAuthn registration response and build CTAP2 MakeCredential
      * response bytes (status byte + CBOR) with packed attestation.
+     * Patches AAGUID in authData and applies flag overrides before re-signing.
      */
-    fun parseCreateResponse(responseJson: String, clientDataHash: ByteArray): ByteArray {
+    fun parseCreateResponse(responseJson: String, clientDataHash: ByteArray, rpId: String): ByteArray {
         val json = JSONObject(responseJson)
         val response = json.getJSONObject("response")
         val attestationObjectBytes = response.getString("attestationObject").decodeBase64url()
@@ -114,16 +124,27 @@ object WebAuthnBridge {
         val attObj = fromCborToEnd(attestationObjectBytes)
             ?: error("Failed to decode attestationObject CBOR")
 
-        val authData = attObj.getRequired("authData").unbox<ByteArray>()
+        var authData = attObj.getRequired("authData").unbox<ByteArray>()
+
+        // Patch AAGUID in attested credential data to match our configured AAGUID
+        val mat = AttestationKey.getMaterial()
+        authData = AuthDataParser.patchAaguid(authData, mat.aaguid)
+
+        // Apply per-rpId flag overrides (UP/UV only — safe because we re-sign)
+        val override = RpIdOverrideRepository.getOverride(rpId)
+        if (override != null) {
+            authData = AuthDataParser.patchFlags(authData, up = override.overrideUp, uv = override.overrideUv)
+            Log.i(TAG, "Applied flag overrides for rpId=$rpId: up=${override.overrideUp} uv=${override.overrideUv}")
+        }
 
         // Re-attest with our batch attestation key (packed + x5c)
-        val sig = AttestationKey.sign(authData, clientDataHash)
+        val sig = mat.sign(authData, clientDataHash)
         val attStmt = CborTextStringMap(mapOf(
             "alg" to CborLong(CoseAlgorithm.ES256),
             "sig" to CborByteString(sig),
             "x5c" to CborArray(arrayOf(
-                CborByteString(AttestationKey.certDer),
-                CborByteString(AttestationKey.caCertDer)
+                CborByteString(mat.certDer),
+                CborByteString(mat.caCertDer)
             ))
         ))
 

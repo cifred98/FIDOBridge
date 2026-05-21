@@ -2,6 +2,7 @@ package com.puntokek.fidobridge.protocol
 
 import android.util.Log
 import com.puntokek.fidobridge.protocol.cbor.*
+import com.puntokek.fidobridge.settings.AppSettings
 
 private const val TAG = "Ctap2Authenticator"
 
@@ -18,6 +19,8 @@ object Ctap2Authenticator {
      */
     fun handleGetInfo(): CborValue {
         Log.i(TAG, "authenticatorGetInfo → building response")
+
+        val currentAaguid = AppSettings.getAaguid()
 
         val options = CborTextStringMap(mapOf(
             "plat" to CborBoolean(false),   // not a platform authenticator
@@ -37,7 +40,7 @@ object Ctap2Authenticator {
             GetInfoResponse.VERSIONS to CborArray(arrayOf(
                 CborTextString("FIDO_2_0")
             )),
-            GetInfoResponse.AAGUID to CborByteString(FIDOBRIDGE_AAGUID),
+            GetInfoResponse.AAGUID to CborByteString(currentAaguid),
             GetInfoResponse.OPTIONS to options,
             GetInfoResponse.MAX_MSG_SIZE to CborLong(MAX_CBOR_MSG_SIZE),
             GetInfoResponse.MAX_CREDENTIAL_COUNT_IN_LIST to CborLong(8),

@@ -76,6 +76,7 @@ class Ctap2CommandRouter {
             requestJson = requestJson,
             clientDataHash = clientDataHash,
             origin = origin,
+            rpId = rpId,
             deferred = CompletableDeferred()
         ))
     }
@@ -97,6 +98,7 @@ class Ctap2CommandRouter {
             requestJson = requestJson,
             clientDataHash = clientDataHash,
             origin = origin,
+            rpId = rpId,
             deferred = CompletableDeferred()
         ))
     }
