@@ -2,7 +2,8 @@ package com.puntokek.fidobridge.crypto
 
 import android.content.Context
 import android.util.Log
-import com.puntokek.fidobridge.protocol.FIDOBRIDGE_AAGUID
+import com.puntokek.fidobridge.settings.AppSettings
+import com.puntokek.fidobridge.util.toHex
 import org.bouncycastle.asn1.*
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.*
@@ -12,8 +13,11 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.File
 import java.math.BigInteger
 import java.security.*
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
+import java.text.SimpleDateFormat
 import java.util.*
 
 private const val TAG = "AttestationKey"
@@ -27,37 +31,14 @@ private const val LEAF_KEY_FILE = "attestation_leaf_key.der"
 private const val LEAF_CERT_FILE = "attestation_leaf_cert.der"
 
 /**
- * Manages the batch attestation key and certificate chain for packed attestation.
- * Keys and certs are generated once on first launch and persisted to internal storage.
+ * Immutable snapshot of attestation material for thread-safe usage during signing.
  */
-object AttestationKey {
-
-    lateinit var certDer: ByteArray
-        private set
-    lateinit var caCertDer: ByteArray
-        private set
-    private lateinit var privateKey: PrivateKey
-
-    /**
-     * Initialize attestation keys. Must be called once from Application.onCreate().
-     * Loads existing keys from storage or generates new ones on first launch.
-     */
-    fun init(context: Context) {
-        val filesDir = context.filesDir
-
-        if (File(filesDir, LEAF_KEY_FILE).exists()) {
-            loadKeys(filesDir)
-            Log.i(TAG, "Loaded existing attestation keys")
-        } else {
-            generateAndSaveKeys(filesDir)
-            Log.i(TAG, "Generated new attestation keys")
-        }
-    }
-
-    /**
-     * Sign (authenticatorData || clientDataHash) with the batch attestation key
-     * using SHA256withECDSA (ES256).
-     */
+data class AttestationMaterial(
+    val aaguid: ByteArray,
+    val certDer: ByteArray,
+    val caCertDer: ByteArray,
+    val privateKey: PrivateKey
+) {
     fun sign(authenticatorData: ByteArray, clientDataHash: ByteArray): ByteArray {
         val sig = Signature.getInstance("SHA256withECDSA")
         sig.initSign(privateKey)
@@ -65,32 +46,172 @@ object AttestationKey {
         sig.update(clientDataHash)
         return sig.sign()
     }
+}
 
-    private fun loadKeys(dir: File) {
-        caCertDer = File(dir, CA_CERT_FILE).readBytes()
-        certDer = File(dir, LEAF_CERT_FILE).readBytes()
-        val leafKeyBytes = File(dir, LEAF_KEY_FILE).readBytes()
-        val kf = KeyFactory.getInstance("EC")
-        privateKey = kf.generatePrivate(PKCS8EncodedKeySpec(leafKeyBytes))
+/**
+ * Human-readable info about the current attestation key for the settings UI.
+ */
+data class AttestationKeyInfo(
+    val aaguid: String,
+    val aaguidUuid: String,
+    val certSubject: String,
+    val certIssuer: String,
+    val certExpiry: String,
+    val certSerial: String,
+    val certFingerprint: String
+)
+
+/**
+ * Parameters for certificate generation.
+ */
+data class CertParams(
+    val subject: String,
+    val issuer: String,
+    val expiryYears: Int,
+    val serialHex: String  // empty = random
+)
+
+/**
+ * Manages the batch attestation key and certificate chain for packed attestation.
+ * Keys and certs are generated once on first launch and persisted to internal storage.
+ * Supports regeneration with custom AAGUID.
+ */
+object AttestationKey {
+
+    @Volatile
+    private var material: AttestationMaterial? = null
+    private lateinit var filesDir: File
+
+    /**
+     * Initialize attestation keys. Must be called once from Application.onCreate().
+     * Loads existing keys from storage or generates new ones on first launch.
+     */
+    fun init(context: Context) {
+        filesDir = context.filesDir
+        val aaguid = AppSettings.getAaguid()
+
+        if (File(filesDir, LEAF_KEY_FILE).exists()) {
+            loadKeys(aaguid)
+            Log.i(TAG, "Loaded existing attestation keys")
+        } else {
+            generateAndSaveKeys(aaguid, getCertParamsFromSettings())
+            Log.i(TAG, "Generated new attestation keys (aaguid=${aaguid.toHex()})")
+        }
     }
 
-    private fun generateAndSaveKeys(dir: File) {
+    /** Get current attestation material snapshot (thread-safe). */
+    fun getMaterial(): AttestationMaterial =
+        material ?: error("AttestationKey not initialized")
+
+    // Legacy accessors for backward compatibility
+    val certDer: ByteArray get() = getMaterial().certDer
+    val caCertDer: ByteArray get() = getMaterial().caCertDer
+
+    fun sign(authenticatorData: ByteArray, clientDataHash: ByteArray): ByteArray =
+        getMaterial().sign(authenticatorData, clientDataHash)
+
+    /**
+     * Regenerate all keys and certificates with the given AAGUID and cert params.
+     * Deletes old key files and generates fresh ones.
+     */
+    @Synchronized
+    fun regenerate(aaguid: ByteArray, certParams: CertParams = getCertParamsFromSettings()) {
+        require(aaguid.size == 16) { "AAGUID must be 16 bytes" }
+        Log.i(TAG, "Regenerating attestation keys with aaguid=${aaguid.toHex()}")
+
+        // Delete old files
+        listOf(CA_KEY_FILE, CA_CERT_FILE, LEAF_KEY_FILE, LEAF_CERT_FILE).forEach {
+            File(filesDir, it).delete()
+        }
+
+        generateAndSaveKeys(aaguid, certParams)
+        Log.i(TAG, "Attestation keys regenerated successfully")
+    }
+
+    /** Build CertParams from current AppSettings values. */
+    fun getCertParamsFromSettings(): CertParams = CertParams(
+        subject = AppSettings.getCertSubject(),
+        issuer = AppSettings.getCertIssuer(),
+        expiryYears = AppSettings.getCertExpiryYears(),
+        serialHex = AppSettings.getCertSerial()
+    )
+
+    /**
+     * Get human-readable info about the current attestation key.
+     */
+    fun getKeyInfo(): AttestationKeyInfo {
+        val mat = getMaterial()
+        val aaguidHex = mat.aaguid.toHex()
+        val aaguidUuid = formatAsUuid(mat.aaguid)
+
+        val cert = parseCertificate(mat.certDer)
+        val fingerprint = MessageDigest.getInstance("SHA-256")
+            .digest(mat.certDer)
+            .toHex()
+            .chunked(2).joinToString(":")
+
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+
+        return AttestationKeyInfo(
+            aaguid = aaguidHex,
+            aaguidUuid = aaguidUuid,
+            certSubject = cert?.subjectX500Principal?.name ?: "Unknown",
+            certIssuer = cert?.issuerX500Principal?.name ?: "Unknown",
+            certExpiry = cert?.notAfter?.let { dateFormat.format(it) } ?: "Unknown",
+            certSerial = cert?.serialNumber?.toString(16) ?: "Unknown",
+            certFingerprint = fingerprint
+        )
+    }
+
+    private fun formatAsUuid(bytes: ByteArray): String {
+        require(bytes.size == 16)
+        val hex = bytes.toHex()
+        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}"
+    }
+
+    private fun parseCertificate(der: ByteArray): X509Certificate? = try {
+        val cf = CertificateFactory.getInstance("X.509")
+        cf.generateCertificate(der.inputStream()) as X509Certificate
+    } catch (_: Exception) { null }
+
+    private fun loadKeys(aaguid: ByteArray) {
+        val caCertBytes = File(filesDir, CA_CERT_FILE).readBytes()
+        val leafCertBytes = File(filesDir, LEAF_CERT_FILE).readBytes()
+        val leafKeyBytes = File(filesDir, LEAF_KEY_FILE).readBytes()
+        val kf = KeyFactory.getInstance("EC")
+        val privKey = kf.generatePrivate(PKCS8EncodedKeySpec(leafKeyBytes))
+
+        material = AttestationMaterial(
+            aaguid = aaguid,
+            certDer = leafCertBytes,
+            caCertDer = caCertBytes,
+            privateKey = privKey
+        )
+    }
+
+    private fun generateAndSaveKeys(aaguid: ByteArray, certParams: CertParams) {
         val kpg = KeyPairGenerator.getInstance("EC")
         kpg.initialize(ECGenParameterSpec("secp256r1"))
 
         // Generate CA key pair
         val caKeyPair = kpg.generateKeyPair()
-        val caName = X500Name("CN=FIDOBridge Root CA, O=FIDOBridge")
+        val caName = X500Name(certParams.issuer)
         val now = Date()
-        val tenYears = Date(now.time + 10L * 365 * 24 * 3600 * 1000)
+        val expiry = Date(now.time + certParams.expiryYears.toLong() * 365 * 24 * 3600 * 1000)
+
+        // Serial: use custom if provided, otherwise random
+        val serial = if (certParams.serialHex.isNotBlank()) {
+            try { BigInteger(certParams.serialHex, 16) } catch (_: Exception) { BigInteger(128, SecureRandom()) }
+        } else {
+            BigInteger(128, SecureRandom())
+        }
 
         // Self-signed CA certificate
-        val caSerial = BigInteger(128, SecureRandom())
         val caCertBuilder = X509v3CertificateBuilder(
             caName,
-            caSerial,
+            serial,
             now,
-            tenYears,
+            expiry,
             caName,
             SubjectPublicKeyInfo.getInstance(caKeyPair.public.encoded)
         )
@@ -108,18 +229,18 @@ object AttestationKey {
 
         val caSigner = JcaContentSignerBuilder("SHA256withECDSA").build(caKeyPair.private)
         val caCert = JcaX509CertificateConverter().getCertificate(caCertBuilder.build(caSigner))
-        caCertDer = caCert.encoded
+        val caCertDerBytes = caCert.encoded
 
         // Generate leaf (attestation) key pair
         val leafKeyPair = kpg.generateKeyPair()
-        val leafName = X500Name("CN=FIDOBridge Attestation, O=FIDOBridge")
+        val leafName = X500Name(certParams.subject)
         val leafSerial = BigInteger(128, SecureRandom())
 
         val leafCertBuilder = X509v3CertificateBuilder(
             caName,
             leafSerial,
             now,
-            tenYears,
+            expiry,
             leafName,
             SubjectPublicKeyInfo.getInstance(leafKeyPair.public.encoded)
         )
@@ -128,7 +249,7 @@ object AttestationKey {
             BasicConstraints(false)
         )
         // FIDO AAGUID extension
-        val aaguidValue = DEROctetString(FIDOBRIDGE_AAGUID)
+        val aaguidValue = DEROctetString(aaguid)
         leafCertBuilder.addExtension(
             ASN1ObjectIdentifier(FIDO_AAGUID_OID), false,
             aaguidValue
@@ -136,13 +257,21 @@ object AttestationKey {
 
         val leafSigner = JcaContentSignerBuilder("SHA256withECDSA").build(caKeyPair.private)
         val leafCert = JcaX509CertificateConverter().getCertificate(leafCertBuilder.build(leafSigner))
-        certDer = leafCert.encoded
-        privateKey = leafKeyPair.private
+        val leafCertDerBytes = leafCert.encoded
+        val leafPrivateKey = leafKeyPair.private
+
+        // Set material atomically
+        material = AttestationMaterial(
+            aaguid = aaguid,
+            certDer = leafCertDerBytes,
+            caCertDer = caCertDerBytes,
+            privateKey = leafPrivateKey
+        )
 
         // Persist to internal storage
-        File(dir, CA_KEY_FILE).writeBytes(caKeyPair.private.encoded)
-        File(dir, CA_CERT_FILE).writeBytes(caCertDer)
-        File(dir, LEAF_KEY_FILE).writeBytes(leafKeyPair.private.encoded)
-        File(dir, LEAF_CERT_FILE).writeBytes(certDer)
+        File(filesDir, CA_KEY_FILE).writeBytes(caKeyPair.private.encoded)
+        File(filesDir, CA_CERT_FILE).writeBytes(caCertDerBytes)
+        File(filesDir, LEAF_KEY_FILE).writeBytes(leafPrivateKey.encoded)
+        File(filesDir, LEAF_CERT_FILE).writeBytes(leafCertDerBytes)
     }
 }
