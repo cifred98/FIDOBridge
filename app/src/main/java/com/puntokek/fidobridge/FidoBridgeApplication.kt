@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.puntokek.fidobridge.bridge.PendingCredentialOperation
 import com.puntokek.fidobridge.crypto.AttestationKey
+import com.puntokek.fidobridge.crypto.mds.MdsRepository
 import com.puntokek.fidobridge.protocol.Ctap2CommandRouter
 import com.puntokek.fidobridge.settings.AppSettings
 import com.puntokek.fidobridge.settings.RpIdOverrideRepository
@@ -47,6 +48,7 @@ class FidoBridgeApplication : Application() {
         super.onCreate()
         AppSettings.init(this)
         RpIdOverrideRepository.init(this)
+        MdsRepository.init(this)
         AttestationKey.init(this)
         CableTransportService.init(this)
         commandRouter = Ctap2CommandRouter()

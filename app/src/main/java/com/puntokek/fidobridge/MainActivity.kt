@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import com.puntokek.fidobridge.ui.cable.CableQrScanScreen
 import com.puntokek.fidobridge.ui.debug.DebugLogPanel
 import com.puntokek.fidobridge.ui.settings.AttestationKeyScreen
+import com.puntokek.fidobridge.ui.settings.MdsImportScreen
 import com.puntokek.fidobridge.ui.settings.RpIdOverridesScreen
 import com.puntokek.fidobridge.ui.settings.TransportSettingsScreen
 import com.puntokek.fidobridge.ui.theme.FIDOBridgeTheme
@@ -55,16 +56,22 @@ private fun MainScreen() {
                     onClick = { selectedTab = 2 }
                 )
                 NavigationBarItem(
-                    icon = { Text("📡") },
-                    label = { Text("Transports") },
+                    icon = { Text("📦") },
+                    label = { Text("MDS") },
                     selected = selectedTab == 3,
                     onClick = { selectedTab = 3 }
                 )
                 NavigationBarItem(
-                    icon = { Text("⚙️") },
-                    label = { Text("Overrides") },
+                    icon = { Text("📡") },
+                    label = { Text("Transports") },
                     selected = selectedTab == 4,
                     onClick = { selectedTab = 4 }
+                )
+                NavigationBarItem(
+                    icon = { Text("⚙️") },
+                    label = { Text("Overrides") },
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 }
                 )
             }
         }
@@ -73,8 +80,9 @@ private fun MainScreen() {
             0 -> DebugLogPanel(modifier = Modifier.padding(innerPadding))
             1 -> CableQrScanScreen(modifier = Modifier.padding(innerPadding))
             2 -> AttestationKeyScreen(modifier = Modifier.padding(innerPadding))
-            3 -> TransportSettingsScreen(modifier = Modifier.padding(innerPadding))
-            4 -> RpIdOverridesScreen(modifier = Modifier.padding(innerPadding))
+            3 -> MdsImportScreen(modifier = Modifier.padding(innerPadding))
+            4 -> TransportSettingsScreen(modifier = Modifier.padding(innerPadding))
+            5 -> RpIdOverridesScreen(modifier = Modifier.padding(innerPadding))
         }
     }
 }
