@@ -36,6 +36,9 @@ object Ctap2Authenticator {
             ))
         ))
 
+        val transportStrings = AppSettings.getTransports()
+        val transportsArray: Array<CborValue> = transportStrings.map { CborTextString(it) }.toTypedArray()
+
         val info = CborLongMap(mapOf(
             GetInfoResponse.VERSIONS to CborArray(arrayOf(
                 CborTextString("FIDO_2_0")
@@ -45,13 +48,11 @@ object Ctap2Authenticator {
             GetInfoResponse.MAX_MSG_SIZE to CborLong(MAX_CBOR_MSG_SIZE),
             GetInfoResponse.MAX_CREDENTIAL_COUNT_IN_LIST to CborLong(8),
             GetInfoResponse.MAX_CREDENTIAL_ID_LENGTH to CborLong(64),
-            GetInfoResponse.TRANSPORTS to CborArray(arrayOf(
-                CborTextString("nfc")
-            )),
+            GetInfoResponse.TRANSPORTS to CborArray(transportsArray),
             GetInfoResponse.ALGORITHMS to algorithms
         ))
 
-        Log.i(TAG, "authenticatorGetInfo: versions=[FIDO_2_0] transport=nfc alg=ES256/-7")
+        Log.i(TAG, "authenticatorGetInfo: versions=[FIDO_2_0] transports=$transportStrings alg=ES256/-7")
         return info
     }
 }

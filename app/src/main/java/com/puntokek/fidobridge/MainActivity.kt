@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.puntokek.fidobridge.ui.cable.CableQrScanScreen
 import com.puntokek.fidobridge.ui.debug.DebugLogPanel
 import com.puntokek.fidobridge.ui.settings.AttestationKeyScreen
 import com.puntokek.fidobridge.ui.settings.RpIdOverridesScreen
+import com.puntokek.fidobridge.ui.settings.TransportSettingsScreen
 import com.puntokek.fidobridge.ui.theme.FIDOBridgeTheme
 
 class MainActivity : ComponentActivity() {
@@ -36,29 +38,43 @@ private fun MainScreen() {
             NavigationBar {
                 NavigationBarItem(
                     icon = { Text("📋") },
-                    label = { Text("Debug Log") },
+                    label = { Text("Debug") },
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Text("🔑") },
-                    label = { Text("Attestation") },
+                    icon = { Text("📷") },
+                    label = { Text("caBLE") },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
                 NavigationBarItem(
-                    icon = { Text("⚙️") },
-                    label = { Text("Overrides") },
+                    icon = { Text("🔑") },
+                    label = { Text("Attestation") },
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 }
+                )
+                NavigationBarItem(
+                    icon = { Text("📡") },
+                    label = { Text("Transports") },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 }
+                )
+                NavigationBarItem(
+                    icon = { Text("⚙️") },
+                    label = { Text("Overrides") },
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 }
                 )
             }
         }
     ) { innerPadding ->
         when (selectedTab) {
             0 -> DebugLogPanel(modifier = Modifier.padding(innerPadding))
-            1 -> AttestationKeyScreen(modifier = Modifier.padding(innerPadding))
-            2 -> RpIdOverridesScreen(modifier = Modifier.padding(innerPadding))
+            1 -> CableQrScanScreen(modifier = Modifier.padding(innerPadding))
+            2 -> AttestationKeyScreen(modifier = Modifier.padding(innerPadding))
+            3 -> TransportSettingsScreen(modifier = Modifier.padding(innerPadding))
+            4 -> RpIdOverridesScreen(modifier = Modifier.padding(innerPadding))
         }
     }
 }

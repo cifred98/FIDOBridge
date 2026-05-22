@@ -4,13 +4,11 @@
 
 FIDOBridge is an Android app that emulates an NFC FIDO2 security key using Host-based Card Emulation (HCE). It bridges NFC CTAP2 requests to the Android Credential Manager / WebAuthn API, delegating credential creation and assertion to the system password manager.
 
-**Data flow:** NFC Reader → `HostApduService` (APDU framing) → CTAP2 command dispatcher (CBOR decode) → WebAuthn/Credential Manager API → system password manager → CTAP2 CBOR response → APDU response → NFC Reader.
-
-The project name in code is `FIDOBridge`.
+**Data flow:** NFC Reader → `FidoNfcService` (APDU framing) → `Ctap2CommandRouter` (CBOR decode/dispatch) → WebAuthn/Credential Manager API → system password manager → CTAP2 CBOR response → APDU response → NFC Reader.
 
 ## Reference Implementation
 
-A working FIDO2 NFC authenticator lives at `/home/cifred/AndroidStudioProjects/android-fido-authenticator`. It implements CTAP2 over NFC with its own key management and credential store. FIDOBridge reuses the same NFC/APDU/CTAP2 framing patterns but replaces the crypto/credential layer with Android's Credential Manager API.
+A working FIDO2 NFC authenticator exists in the sibling directory `android-fido-authenticator` (relative to this project's parent). It implements CTAP2 over NFC with its own key management and credential store. FIDOBridge reuses the same NFC/APDU/CTAP2 framing patterns but replaces the crypto/credential layer with Android's Credential Manager API.
 
 ### What to reuse from the reference project
 - **NFC HCE service pattern** — `HostApduService` subclass, AID filter XML (`A0000006472F0001`), APDU request/response parsing
@@ -32,7 +30,8 @@ A working FIDO2 NFC authenticator lives at `/home/cifred/AndroidStudioProjects/a
 - **Min SDK:** 34 (Android 14) — modern APIs only, no legacy compat needed
 - **Target/Compile SDK:** 36
 - **Build:** Gradle with Kotlin DSL, version catalog (`gradle/libs.versions.toml`)
-- **CBOR:** Custom implementation (no external library) — `CborValue` sealed hierarchy with `writeAsCbor()` / `fromCborToEnd()`
+- **CBOR:** Custom implementation (no external library) — `CborValue` interface hierarchy with `writeAsCbor()` / `fromCborToEnd()`
+- **Crypto:** BouncyCastle (`bcpkix-jdk18on`) for attestation certificate generation
 
 ## Build & Test Commands
 
@@ -58,28 +57,47 @@ A working FIDO2 NFC authenticator lives at `/home/cifred/AndroidStudioProjects/a
 ### Layers
 
 1. **Transport layer** (`transport/`)
-   - `FidoNfcService : HostApduService` — receives raw APDUs from NFC
-   - `ApduRequest` / `ApduResponse` — parse/encode ISO 7816-4 APDUs with status words
-   - AID selection: responds to `SELECT` for `A0000006472F0001` with `"U2F_V2"`
-   - Routes `CLA=0x80 INS=0x10` APDUs to CTAP2 dispatcher; `CLA=0x00` to CTAP1/U2F
-   - For async commands (MakeCredential/GetAssertion), returns `null` from `processCommandApdu()` and calls `sendResponseApdu()` when the CredentialManager operation completes
+   - `FidoNfcService : HostApduService` — receives raw APDUs from NFC, manages async lifecycle
+   - `ApduRequest` / `ApduResponse` (in `transport/apdu/`) — parse/encode ISO 7816-4 APDUs with status words
+   - AID selection: responds to `SELECT` for `A0000006472F0001` with FIDO version string
+   - Routes `CLA=0x80 INS=0x10` APDUs to `Ctap2CommandRouter`
+   - For async commands, returns `null` from `processCommandApdu()` and calls `sendResponseApdu()` when complete
+   - Pre-checks GetAssertion credentials via `CredentialManager.prepareGetCredential()` before launching UI
+   - **caBLE scaffold** (`transport/cable/`):
+     - `CableTransportService` — singleton managing caBLE session lifecycle (QR → BLE → tunnel → CTAP2)
+     - `CableSession` — state machine for a single caBLE connection (IDLE → ADVERTISING → ACTIVE → CLOSED)
+     - `CableQrCode` — parsed representation of the FIDO2 caBLE QR code (peer public key + secret)
+     - `CableConstants` — protocol constants (BLE UUID, tunnel domain, QR CBOR keys, Noise protocol)
 
 2. **Protocol layer** (`protocol/`)
-   - `CTAPAuthenticator` — top-level dispatcher, routes CTAP2 command bytes to handlers
-   - `Authenticator` companion object — implements `handleGetInfo()`, `handleMakeCredential()`, `handleGetAssertion()`
-   - CTAP2 commands: `0x01` MakeCredential, `0x02` GetAssertion, `0x04` GetInfo
+   - `Ctap2CommandRouter` — dispatches CTAP2 command bytes to handlers, returns `CtapResult` (sealed class: `Immediate` or `Async`)
+   - `Ctap2Authenticator` — Kotlin `object` implementing `handleGetInfo()` (synchronous response)
+   - `Ctap2Constants.kt` — `Ctap2Command` enum, `Ctap2StatusCode` enum, COSE constants, parameter enums (`MakeCredentialParam`, `GetAssertionParam`, etc.)
+   - `CtapResult` — sealed class representing sync (`Immediate`) vs async (`Async`) command results
+   - `AuthDataParser` — parses raw authenticatorData bytes into structured `ParsedAuthData` (rpIdHash, flags, signCount, attestedCredData)
 
 3. **CBOR layer** (`protocol/cbor/`)
-   - `CborEncoding.kt` — `CborValue` type hierarchy (`CborLong`, `CborByteString`, `CborTextString`, `CborArray`, `CborLongMap`, `CborTextStringMap`, etc.)
+   - `CborEncoding.kt` — `CborValue` interface + implementations (`CborLong`, `CborByteString`, `CborTextString`, `CborArray`, `CborLongMap`, `CborTextStringMap`, `CborBoolean`, etc.). Uses `CborBoxedValue<T>` for typed value extraction.
    - `CborDecoding.kt` — `fromCborToEnd()` parser
    - `CborConstants.kt` — CBOR major type constants
-   - `Messages.kt` — CTAP2 field constants (`MAKE_CREDENTIAL_CLIENT_DATA_HASH = 0x1L`, etc.), `RequestCommand` enum, `CtapError` enum, COSE key templates, authenticator flags
+   - `CborHelpers.kt` — navigation/extraction helpers (`unbox<T>()`, `getRequired()`, `toCtap2SuccessResponse()`)
 
 4. **WebAuthn Bridge layer** (`bridge/`)
    - `WebAuthnBridge` — converts CTAP2 CBOR params to WebAuthn JSON requests and parses responses back to CTAP2 CBOR
-   - `CredentialBridgeActivity` — transparent activity that calls `CredentialManager.createCredential()` / `getCredential()` with `setOrigin("https://{rpId}")` and passes `clientDataHash` directly so the credential provider signs over the correct hash
+   - `CredentialBridgeActivity` — transparent activity that calls `CredentialManager.createCredential()` / `getCredential()` with `setOrigin("https://{rpId}")` and passes `clientDataHash` directly
    - `PendingCredentialOperation` — data class holding request state + `CompletableDeferred<ByteArray>` for async communication between NFC service and activity
-   - `FidoBridgeApplication` manages single-flight pending operations with cancellation
+
+5. **Crypto layer** (`crypto/`)
+   - `AttestationKey` — manages batch attestation key pair and X.509 certificate chain (self-signed CA + leaf with FIDO AAGUID extension). Keys persisted to app-private files.
+
+6. **Settings layer** (`settings/`)
+   - `AppSettings` — singleton managing SharedPreferences with reactive `StateFlow` for Compose UI (AAGUID, certificate subject/issuer/expiry, advertised transports)
+   - `RpIdOverrideRepository` — manages per-RP ID origin overrides
+
+7. **Application** (`FidoBridgeApplication`)
+   - Initializes `AttestationKey` and `Ctap2CommandRouter` in `onCreate()`
+   - Manages single-flight `PendingCredentialOperation` with `@Synchronized` accessors
+   - No DI framework (Hilt/Dagger) — manual wiring via companion object statics
 
 ### Async NFC Flow
 
@@ -91,10 +109,7 @@ For MakeCredential and GetAssertion (which require user interaction):
 5. Activity completes the `CompletableDeferred` with CTAP2 response bytes
 6. NFC service coroutine calls `sendResponseApdu()`
 7. `onDeactivated()` cancels any pending operation if NFC link drops
-
-### setOrigin Permission
-
-`setOrigin()` requires `android.permission.CREDENTIAL_MANAGER_SET_ORIGIN` (signature-level). The app must be signed with a platform key or have the permission granted through a privileged allowlist.
+8. While async is in-flight, duplicate commands from the reader are absorbed (returns `null`)
 
 ### Key Protocol Details
 
@@ -104,46 +119,27 @@ For MakeCredential and GetAssertion (which require user interaction):
 - **attestedCredentialData:** `aaguid (16B) + credentialIdLength (2B, big-endian) + credentialId + COSE public key (CBOR)`
 - **Supported algorithm:** ES256 only (COSE algorithm ID `-7`)
 - **CBOR map key ordering:** maps are sorted by encoded key bytes before serialization (per CTAP2 canonical CBOR)
+- **setOrigin permission:** `android.permission.CREDENTIAL_MANAGER_SET_ORIGIN` (signature-level) — requires platform signing or privileged allowlist
 
 ## Conventions
 
 - Package: `com.puntokek.fidobridge`
 - Dependencies managed via version catalog at `gradle/libs.versions.toml` — add new deps there, not as inline version strings
 - Java 11 source/target compatibility
-- Manual dependency injection via `Application` subclass (no Hilt/Dagger) — `FidoApplication` wires up the `CTAPAuthenticator` and passes it to the HCE service
-- HCE service must be declared in `AndroidManifest.xml` with `android.permission.BIND_NFC_SERVICE` and the AID filter XML resource
+- Release builds use ProGuard minification + resource shrinking (`isMinifyEnabled = true`, `isShrinkResources = true`)
+- Manual dependency injection via `FidoBridgeApplication` companion object — no Hilt/Dagger
+- HCE service declared in `AndroidManifest.xml` with `android.permission.BIND_NFC_SERVICE` and AID filter XML resource
 - Use `FIDOBridgeTheme` as the root Compose wrapper
 - Compose-first UI — no XML layouts
+- Utility extensions in `util/Extensions.kt`: `ByteArray.sha256()`, `.base64url()`, `.toHex()`, `UInt.bytes()`, etc.
+- CTAP2 errors thrown via `ctap2Error(status, message)` helper — caught and converted to error responses in `Ctap2CommandRouter`
+- `@OptIn(ExperimentalUnsignedTypes::class)` used throughout protocol/CBOR code for `UByte`/`UByteArray`
 
 ## Debug Logging
 
-The app includes a comprehensive APDU debug logging system, gated behind `BuildConfig.DEBUG`, that must be disabled for production.
+APDU debug logging is gated behind `BuildConfig.DEBUG` and must remain disabled in production.
 
-### What to log
-
-Every APDU exchange must be logged at two levels:
-
-1. **Raw APDU** — hex dump of the full byte array, plus parsed ISO 7816-4 fields: `CLA`, `INS`, `P1`, `P2`, `Lc`, `Data`, `Le` (request) or `Data`, `SW1`, `SW2` (response)
-2. **Decoded payload** — when the APDU data contains CTAP2 content:
-   - Command byte name (e.g. `GetInfo`, `MakeCredential`, `GetAssertion`)
-   - CBOR-decoded request/response as a human-readable structure (key names resolved to their CTAP2 field names, byte arrays as hex/base64url)
-   - For `SELECT AID`: the selected AID in hex
-
-### Where logs go
-
-- **Logcat** — tagged `APDU-DEBUG`, one structured log entry per APDU request and response
-- **UI** — a scrollable debug log panel in the main Compose UI showing timestamped entries with raw + decoded info. Use a `StateFlow<List<LogEntry>>` in a shared `DebugLog` singleton so the HCE service and UI observe the same log stream
-- Both destinations receive identical information
-
-### Implementation pattern
-
-```kotlin
-// Gate all debug logging behind BuildConfig.DEBUG
-if (BuildConfig.DEBUG) {
-    DebugLog.logApdu(...)
-}
-```
-
-- `DebugLog` singleton: thread-safe append to a `MutableStateFlow<List<LogEntry>>`, capped at a reasonable size (e.g. 200 entries)
-- `LogEntry` data class: timestamp, direction (IN/OUT), raw hex, parsed fields, decoded CTAP2 content (nullable)
-- The UI collects the flow and renders entries in a `LazyColumn`
+- **Logcat tag:** `APDU-DEBUG`
+- **UI:** scrollable debug log panel via `DebugLog` singleton (`StateFlow<List<LogEntry>>`) rendered in a `LazyColumn`
+- Every APDU exchange is logged with raw hex + parsed ISO 7816-4 fields + decoded CTAP2 content
+- `DebugLog.logRequest()` / `DebugLog.logResponse()` called from `FidoNfcService`

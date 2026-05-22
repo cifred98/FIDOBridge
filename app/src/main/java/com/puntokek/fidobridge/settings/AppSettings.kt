@@ -14,11 +14,16 @@ private const val KEY_CERT_SUBJECT = "cert_subject"
 private const val KEY_CERT_ISSUER = "cert_issuer"
 private const val KEY_CERT_EXPIRY_YEARS = "cert_expiry_years"
 private const val KEY_CERT_SERIAL = "cert_serial"
+private const val KEY_TRANSPORTS = "advertised_transports"
 
 private const val DEFAULT_SUBJECT = "CN=FIDOBridge Attestation, O=FIDOBridge"
 private const val DEFAULT_ISSUER = "CN=FIDOBridge Root CA, O=FIDOBridge"
 private const val DEFAULT_EXPIRY_YEARS = 10
 private const val DEFAULT_SERIAL = ""  // empty = random
+
+/** All transport types that can be advertised in GetInfo */
+val ALL_TRANSPORTS = listOf("nfc", "ble", "hybrid", "internal", "usb")
+private val DEFAULT_TRANSPORTS = setOf("nfc")
 
 /**
  * Manages app-level settings stored in SharedPreferences.
@@ -31,9 +36,13 @@ object AppSettings {
     private val _aaguid = MutableStateFlow(FIDOBRIDGE_AAGUID)
     val aaguid: StateFlow<ByteArray> = _aaguid.asStateFlow()
 
+    private val _transports = MutableStateFlow(DEFAULT_TRANSPORTS)
+    val transports: StateFlow<Set<String>> = _transports.asStateFlow()
+
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         _aaguid.value = loadAaguid()
+        _transports.value = loadTransports()
     }
 
     fun getAaguid(): ByteArray = _aaguid.value
@@ -71,6 +80,28 @@ object AppSettings {
             .remove(KEY_CERT_EXPIRY_YEARS)
             .remove(KEY_CERT_SERIAL)
             .apply()
+    }
+
+    // ── Advertised transports ────────────────────────────────────────────
+
+    fun getTransports(): Set<String> = _transports.value
+
+    fun setTransports(value: Set<String>) {
+        val filtered = value.filter { it in ALL_TRANSPORTS }.toSet()
+        val toStore = filtered.ifEmpty { DEFAULT_TRANSPORTS }
+        prefs.edit().putStringSet(KEY_TRANSPORTS, toStore).apply()
+        _transports.value = toStore
+    }
+
+    fun resetTransports() {
+        prefs.edit().remove(KEY_TRANSPORTS).apply()
+        _transports.value = DEFAULT_TRANSPORTS
+    }
+
+    private fun loadTransports(): Set<String> {
+        val stored = prefs.getStringSet(KEY_TRANSPORTS, null) ?: return DEFAULT_TRANSPORTS
+        val valid = stored.filter { it in ALL_TRANSPORTS }.toSet()
+        return valid.ifEmpty { DEFAULT_TRANSPORTS }
     }
 
     private fun loadAaguid(): ByteArray {
