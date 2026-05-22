@@ -113,6 +113,7 @@ object GetInfoResponse {
     const val MAX_CREDENTIAL_ID_LENGTH = 0x08L
     const val TRANSPORTS = 0x09L
     const val ALGORITHMS = 0x0AL
+    const val FIRMWARE_VERSION = 0x0EL
 }
 
 // ── COSE Algorithm Identifiers (RFC 8152) ────────────────────────────────

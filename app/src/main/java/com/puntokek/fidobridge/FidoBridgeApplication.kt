@@ -7,6 +7,7 @@ import com.puntokek.fidobridge.crypto.AttestationKey
 import com.puntokek.fidobridge.crypto.mds.MdsRepository
 import com.puntokek.fidobridge.protocol.Ctap2CommandRouter
 import com.puntokek.fidobridge.settings.AppSettings
+import com.puntokek.fidobridge.settings.AuthenticatorOptions
 import com.puntokek.fidobridge.settings.RpIdOverrideRepository
 import com.puntokek.fidobridge.transport.cable.CableTransportService
 
@@ -47,6 +48,7 @@ class FidoBridgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AppSettings.init(this)
+        AuthenticatorOptions.init(this)
         RpIdOverrideRepository.init(this)
         MdsRepository.init(this)
         AttestationKey.init(this)
