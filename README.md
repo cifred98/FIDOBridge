@@ -1,17 +1,28 @@
 # FIDOBridge
 
-An Android app that turns your phone into an **NFC FIDO2 security key** using Host Card Emulation (HCE).
+An Android app that turns your phone into a **FIDO2 security key** using NFC Host Card Emulation (HCE) or **caBLE** (Cloud-Assisted BLE) hybrid transport.
 
-When an NFC reader requests a FIDO2 authentication or registration, FIDOBridge intercepts the CTAP2 commands and delegates them to Android's [CredentialManager API](https://developer.android.com/identity/sign-in/credential-manager), which in turn uses your system password manager (e.g. Bitwarden) to handle passkeys.
+When a client requests FIDO2 authentication or registration, FIDOBridge intercepts the CTAP2 commands and delegates them to Android's [CredentialManager API](https://developer.android.com/identity/sign-in/credential-manager), which in turn uses your system password manager (e.g. Bitwarden) to handle passkeys.
 
-## How it works
+## Transport methods
+
+### NFC (Host Card Emulation)
 
 1. **Tap your phone** on an NFC reader that requests FIDO2 authentication
 2. FIDOBridge receives the CTAP2 command via NFC
 3. Your password manager prompts you to select or create a passkey
 4. The response is sent back to the NFC reader
 
-This effectively lets you use your phone's password manager as an NFC security key — no dedicated hardware token needed.
+### caBLE (QR code / Hybrid)
+
+1. On a computer, start a FIDO2 registration or authentication and choose "Use a different device"
+2. Open FIDOBridge and tap **Scan QR Code**
+3. Scan the QR code displayed by the browser (e.g. Chrome)
+4. FIDOBridge establishes a secure tunnel via BLE + WebSocket
+5. Your password manager prompts you to select or create a passkey
+6. The response is sent back to the browser over the encrypted tunnel
+
+This lets you use your phone as a security key for any computer with Bluetooth — no NFC reader required.
 
 ## Supported CTAP2 commands
 
@@ -23,11 +34,12 @@ This effectively lets you use your phone's password manager as an NFC security k
 
 ## Setup
 
-### Requirements
+## Requirements
 
 - Android 14+ (API 34)
 - A password manager that supports passkeys **and** allows manually trusting third-party apps as privileged callers (e.g. Bitwarden)
-- NFC enabled on your phone
+- **For NFC:** NFC enabled on your phone
+- **For caBLE:** Bluetooth enabled, camera permission (for QR scanning)
 
 ### Installation
 
@@ -41,11 +53,16 @@ The APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ### First use
 
-1. Install FIDOBridge and open it once (no configuration needed)
-2. Make sure NFC is enabled on your phone
-3. Tap your phone on an NFC reader that requests FIDO2
+1. Install FIDOBridge and open it once
+2. Grant camera and Bluetooth permissions when prompted
+3. For NFC: make sure NFC is enabled, then tap on a reader
+4. For caBLE: tap "Scan QR Code" and scan the code from your browser
 
-The app runs entirely in the background via NFC HCE — you don't need to open it before tapping.
+The NFC transport runs entirely in the background via HCE — you don't need to open the app before tapping.
+
+### Transport override
+
+In Settings → Transport, you can override the transport type advertised in `authenticatorGetInfo`. This controls what the client sees in the `transports` field, regardless of which transport is actually in use.
 
 ## Example: Bitwarden
 
@@ -95,13 +112,19 @@ This is also output to Logcat under the `APDU-DEBUG` tag.
 ## Architecture
 
 ```
-NFC Reader
-    │
-    ▼ (ISO 7816 APDUs)
-FidoNfcService (HCE)
-    │
-    ▼ (CTAP2 commands)
-Ctap2CommandRouter
+NFC Reader                          Browser (Chrome)
+    │                                     │
+    ▼ (ISO 7816 APDUs)                    ▼ (QR code)
+FidoNfcService (HCE)               CableQrScanScreen
+    │                                     │
+    │                                     ▼
+    │                               CableSession
+    │                                 ├── CableTunnel (WebSocket)
+    │                                 ├── CableBleAdvertiser
+    │                                 └── NoiseHandshake (KNpsk0)
+    │                                     │
+    ▼ (CTAP2 commands)                    ▼ (CTAP2 commands)
+Ctap2CommandRouter ◄──────────────────────┘
     │
     ├── GetInfo → Ctap2Authenticator (immediate response)
     │
