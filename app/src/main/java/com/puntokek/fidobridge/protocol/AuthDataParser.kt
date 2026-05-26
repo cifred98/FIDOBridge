@@ -92,7 +92,8 @@ object AuthDataParser {
      * Patch the flags byte in authenticatorData at offset 32.
      * Returns a copy with modified flags.
      */
-    fun patchFlags(authData: ByteArray, up: Boolean? = null, uv: Boolean? = null): ByteArray {
+    fun patchFlags(authData: ByteArray, up: Boolean? = null, uv: Boolean? = null,
+                   be: Boolean? = null, bs: Boolean? = null): ByteArray {
         if (authData.size < MIN_AUTH_DATA_LENGTH) return authData
         val patched = authData.copyOf()
         var flags = patched[32].toInt()
@@ -103,6 +104,14 @@ object AuthDataParser {
         if (uv != null) {
             flags = if (uv) flags or AuthDataFlags.UV.toInt()
             else flags and AuthDataFlags.UV.toInt().inv()
+        }
+        if (be != null) {
+            flags = if (be) flags or AuthDataFlags.BE.toInt()
+            else flags and AuthDataFlags.BE.toInt().inv()
+        }
+        if (bs != null) {
+            flags = if (bs) flags or AuthDataFlags.BS.toInt()
+            else flags and AuthDataFlags.BS.toInt().inv()
         }
         patched[32] = flags.toByte()
         return patched

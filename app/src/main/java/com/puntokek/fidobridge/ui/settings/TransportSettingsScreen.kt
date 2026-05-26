@@ -31,6 +31,9 @@ fun TransportSettingsScreen(modifier: Modifier = Modifier) {
     val maxCredCount by AuthenticatorOptions.maxCredCount.collectAsState()
     val maxCredIdLen by AuthenticatorOptions.maxCredIdLen.collectAsState()
     val firmwareVersion by AuthenticatorOptions.firmwareVersion.collectAsState()
+    val attestationFormat by AuthenticatorOptions.attestationFormat.collectAsState()
+    val overrideBackupEligible by AuthenticatorOptions.overrideBackupEligible.collectAsState()
+    val overrideBackupState by AuthenticatorOptions.overrideBackupState.collectAsState()
 
     Column(
         modifier = modifier
@@ -176,6 +179,46 @@ fun TransportSettingsScreen(modifier: Modifier = Modifier) {
             NumericField("maxCredentialCountInList", maxCredCount) { AuthenticatorOptions.setMaxCredCount(it) }
             NumericField("maxCredentialIdLength", maxCredIdLen) { AuthenticatorOptions.setMaxCredIdLen(it) }
             NumericField("firmwareVersion (0 = not reported)", firmwareVersion) { AuthenticatorOptions.setFirmwareVersion(it) }
+        }
+
+        // ── Attestation Format ──────────────────────────────────────────
+        SectionCard("Attestation Format") {
+            Text(
+                "Controls the fmt field in MakeCredential responses. \"none\" omits attestation signature.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            AuthenticatorOptions.ALL_ATTESTATION_FORMATS.forEach { fmt ->
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = attestationFormat == fmt,
+                        onClick = { AuthenticatorOptions.setAttestationFormat(fmt) }
+                    )
+                    Text(fmt, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 4.dp))
+                }
+            }
+        }
+
+        // ── Credential Flags (BE/BS) ────────────────────────────────────
+        SectionCard("Credential Flags (BE/BS)") {
+            Text(
+                "Override Backup Eligible (BE) and Backup State (BS) flags in authenticatorData. " +
+                        "Set BE=false + BS=false for singleDevice/not-backed-up behavior.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TriStateOptionRow(
+                label = "BE (Backup Eligible)",
+                description = "true=multi-device, false=single-device, absent=passthrough",
+                value = overrideBackupEligible,
+                onValueChange = { AuthenticatorOptions.setOverrideBackupEligible(it) }
+            )
+            TriStateOptionRow(
+                label = "BS (Backup State)",
+                description = "true=backed-up, false=not-backed-up, absent=passthrough",
+                value = overrideBackupState,
+                onValueChange = { AuthenticatorOptions.setOverrideBackupState(it) }
+            )
         }
     }
 }

@@ -104,6 +104,22 @@ object AuthenticatorOptions {
     private val _firmwareVersion = MutableStateFlow(DEFAULT_FIRMWARE_VERSION)
     val firmwareVersion: StateFlow<Int> = _firmwareVersion.asStateFlow()
 
+    // ── Attestation format ───────────────────────────────────────────────
+    val ALL_ATTESTATION_FORMATS = listOf("packed", "none")
+    private const val DEFAULT_ATTESTATION_FORMAT = "packed"
+
+    private val _attestationFormat = MutableStateFlow(DEFAULT_ATTESTATION_FORMAT)
+    val attestationFormat: StateFlow<String> = _attestationFormat.asStateFlow()
+
+    // ── Credential flags (BE/BS) ─────────────────────────────────────────
+    // BE (Backup Eligible) = bit 3 of flags; BS (Backup State) = bit 4
+    // null = passthrough from credential manager, true/false = force override
+    private val _overrideBackupEligible = MutableStateFlow<Boolean?>(null)
+    val overrideBackupEligible: StateFlow<Boolean?> = _overrideBackupEligible.asStateFlow()
+
+    private val _overrideBackupState = MutableStateFlow<Boolean?>(null)
+    val overrideBackupState: StateFlow<Boolean?> = _overrideBackupState.asStateFlow()
+
     // ── Init ─────────────────────────────────────────────────────────────
 
     fun init(context: Context) {
@@ -117,6 +133,9 @@ object AuthenticatorOptions {
         _maxCredCount.value = prefs.getInt("max_cred_count", DEFAULT_MAX_CRED_COUNT)
         _maxCredIdLen.value = prefs.getInt("max_cred_id_len", DEFAULT_MAX_CRED_ID_LEN)
         _firmwareVersion.value = prefs.getInt("firmware_version", DEFAULT_FIRMWARE_VERSION)
+        _attestationFormat.value = prefs.getString("attestation_format", DEFAULT_ATTESTATION_FORMAT) ?: DEFAULT_ATTESTATION_FORMAT
+        _overrideBackupEligible.value = loadNullableBoolean("override_be")
+        _overrideBackupState.value = loadNullableBoolean("override_bs")
     }
 
     // ── Setters ──────────────────────────────────────────────────────────
@@ -171,6 +190,21 @@ object AuthenticatorOptions {
         _firmwareVersion.value = value
     }
 
+    fun setAttestationFormat(value: String) {
+        prefs.edit().putString("attestation_format", value).apply()
+        _attestationFormat.value = value
+    }
+
+    fun setOverrideBackupEligible(value: Boolean?) {
+        saveNullableBoolean("override_be", value)
+        _overrideBackupEligible.value = value
+    }
+
+    fun setOverrideBackupState(value: Boolean?) {
+        saveNullableBoolean("override_bs", value)
+        _overrideBackupState.value = value
+    }
+
     fun resetAll() {
         prefs.edit().clear().apply()
         _versions.value = DEFAULT_VERSIONS
@@ -183,6 +217,9 @@ object AuthenticatorOptions {
         _maxCredCount.value = DEFAULT_MAX_CRED_COUNT
         _maxCredIdLen.value = DEFAULT_MAX_CRED_ID_LEN
         _firmwareVersion.value = DEFAULT_FIRMWARE_VERSION
+        _attestationFormat.value = DEFAULT_ATTESTATION_FORMAT
+        _overrideBackupEligible.value = null
+        _overrideBackupState.value = null
     }
 
     // ── Persistence helpers ──────────────────────────────────────────────
@@ -207,5 +244,15 @@ object AuthenticatorOptions {
     private fun saveOptions(options: Map<String, Boolean>) {
         val set = options.map { "${it.key}=${it.value}" }.toSet()
         prefs.edit().putStringSet("options_set", set).apply()
+    }
+
+    private fun loadNullableBoolean(key: String): Boolean? {
+        if (!prefs.contains(key)) return null
+        return prefs.getBoolean(key, false)
+    }
+
+    private fun saveNullableBoolean(key: String, value: Boolean?) {
+        if (value == null) prefs.edit().remove(key).apply()
+        else prefs.edit().putBoolean(key, value).apply()
     }
 }

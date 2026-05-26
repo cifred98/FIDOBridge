@@ -135,6 +135,8 @@ object CoseKeyParam {
 object AuthDataFlags {
     const val UP: Byte = 0x01           // User Present
     const val UV: Byte = 0x04           // User Verified
+    const val BE: Byte = 0x08           // Backup Eligible
+    const val BS: Byte = 0x10           // Backup State
     const val AT: Byte = 0x40           // Attested credential data included
     const val ED: Byte = 0x80.toByte()  // Extension data included
 }

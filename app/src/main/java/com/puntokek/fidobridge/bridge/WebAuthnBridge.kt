@@ -4,6 +4,7 @@ import android.util.Log
 import com.puntokek.fidobridge.crypto.AttestationKey
 import com.puntokek.fidobridge.protocol.*
 import com.puntokek.fidobridge.protocol.cbor.*
+import com.puntokek.fidobridge.settings.AuthenticatorOptions
 import com.puntokek.fidobridge.settings.RpIdOverrideRepository
 import com.puntokek.fidobridge.util.base64url
 import com.puntokek.fidobridge.util.decodeBase64url
@@ -137,24 +138,41 @@ object WebAuthnBridge {
             Log.i(TAG, "Applied flag overrides for rpId=$rpId: up=${override.overrideUp} uv=${override.overrideUv}")
         }
 
-        // Re-attest with our batch attestation key (packed + x5c)
-        val sig = mat.sign(authData, clientDataHash)
-        val attStmt = CborTextStringMap(mapOf(
-            "alg" to CborLong(CoseAlgorithm.ES256),
-            "sig" to CborByteString(sig),
-            "x5c" to CborArray(arrayOf(
-                CborByteString(mat.certDer),
-                CborByteString(mat.caCertDer)
+        // Apply global BE/BS flag overrides
+        val overrideBe = AuthenticatorOptions.overrideBackupEligible.value
+        val overrideBs = AuthenticatorOptions.overrideBackupState.value
+        if (overrideBe != null || overrideBs != null) {
+            authData = AuthDataParser.patchFlags(authData, be = overrideBe, bs = overrideBs)
+            Log.i(TAG, "Applied BE/BS overrides: be=$overrideBe bs=$overrideBs")
+        }
+
+        // Build attestation based on configured format
+        val fmt = AuthenticatorOptions.attestationFormat.value
+        val ctapResponse = if (fmt == "none") {
+            CborLongMap(mapOf(
+                MakeCredentialResponse.FMT to CborTextString("none"),
+                MakeCredentialResponse.AUTH_DATA to CborByteString(authData),
+                MakeCredentialResponse.ATT_STMT to CborTextStringMap(emptyMap())
             ))
-        ))
+        } else {
+            // Re-attest with our batch attestation key (packed + x5c)
+            val sig = mat.sign(authData, clientDataHash)
+            val attStmt = CborTextStringMap(mapOf(
+                "alg" to CborLong(CoseAlgorithm.ES256),
+                "sig" to CborByteString(sig),
+                "x5c" to CborArray(arrayOf(
+                    CborByteString(mat.certDer),
+                    CborByteString(mat.caCertDer)
+                ))
+            ))
+            CborLongMap(mapOf(
+                MakeCredentialResponse.FMT to CborTextString("packed"),
+                MakeCredentialResponse.AUTH_DATA to CborByteString(authData),
+                MakeCredentialResponse.ATT_STMT to attStmt
+            ))
+        }
 
-        val ctapResponse = CborLongMap(mapOf(
-            MakeCredentialResponse.FMT to CborTextString("packed"),
-            MakeCredentialResponse.AUTH_DATA to CborByteString(authData),
-            MakeCredentialResponse.ATT_STMT to attStmt
-        ))
-
-        Log.i(TAG, "parseCreateResponse: fmt=packed authDataLen=${authData.size} sigLen=${sig.size}")
+        Log.i(TAG, "parseCreateResponse: fmt=$fmt authDataLen=${authData.size}")
         return ctapResponse.toCtap2SuccessResponse()
     }
 
@@ -168,10 +186,17 @@ object WebAuthnBridge {
             ?: error("Failed to decode rawId")
         val response = json.getJSONObject("response")
 
-        val authenticatorData = response.getString("authenticatorData").decodeBase64url()
+        var authenticatorData = response.getString("authenticatorData").decodeBase64url()
             ?: error("Failed to decode authenticatorData")
         val signature = response.getString("signature").decodeBase64url()
             ?: error("Failed to decode signature")
+
+        // Apply global BE/BS flag overrides
+        val overrideBe = AuthenticatorOptions.overrideBackupEligible.value
+        val overrideBs = AuthenticatorOptions.overrideBackupState.value
+        if (overrideBe != null || overrideBs != null) {
+            authenticatorData = AuthDataParser.patchFlags(authenticatorData, be = overrideBe, bs = overrideBs)
+        }
 
         val responseMap = mutableMapOf<Long, CborValue>(
             GetAssertionResponse.CREDENTIAL to CborTextStringMap(mapOf(
